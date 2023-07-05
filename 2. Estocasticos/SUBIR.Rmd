@@ -1,0 +1,105 @@
+---
+title: "Forecasting de Ventas"
+author: "Ignacio Romero"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1) Introducción
+
+La idea es ajustar modelos ARIMA para cada serie en concreto.
+
+Descargamos las librerías necesarias para este *script*.
+
+```{r message=FALSE, warning=FALSE}
+if (!require(data.table)) install.packages("data.table")
+if (!require(forecast)) install.packages("forecast")
+if (!require(ggplot2)) install.packages("ggplot2")
+if (!require(ggthemes)) install.packages("ggthemes")
+if (!require(tidyverse)) install.packages("tidyverse")
+if (!require(lubridate)) install.packages("lubridate")
+```
+
+Cargamos las ventas
+
+```{r}
+ventas <- fread("datos.csv", sep = ",", data.table = F)
+```
+
+```{r echo=FALSE}
+ventas_tabla <- ventas[35:43,1:5] %>% mutate(FECHA = as.character(FECHA)) %>% 
+  rbind(rep("...",5))
+knitr::kable(ventas_tabla, align = "c", row.names = F)
+```
+
+# 2) Ejemplo
+
+A modo de ejemplo utilizaremos la serie temporal correspondiente al punto de venta nº108 y el producto nº1
+
+```{r}
+pdv = "PDV_0108"; sku = "SKU_1"
+serie <- ventas %>% filter(PDV == pdv & SKU == sku)
+```
+
+```{r echo=FALSE, fig.align='center'}
+ggplot(data = serie, aes(x = FECHA, y = VENTA)) + geom_line() + geom_point(size = 0.5) + 
+  labs(title = paste(pdv, sku, sep = " - "), subtitle = paste("Segmento", unique(serie$ABC)))
+```
+
+Dividimos los datos en conjuntos **train** y **test**.
+
+```{r}
+train <- serie[1:375,]
+test <- serie[376:385,]
+```
+
+```{r echo=FALSE}
+train_tabla <- train[1:9,] %>% 
+  mutate(FECHA = as.character(FECHA)) %>% 
+  select(FECHA, VENTA) %>% rbind(rep("...",2))
+knitr::kable(train_tabla, align = "c")
+```
+
+```{r echo=FALSE}
+test_tabla <- test %>% select(FECHA, VENTA)
+knitr::kable(test_tabla, align = "c", row.names = F)
+```
+
+# 3) Auto ARIMA
+
+Los modelos se ajustarán mediante la función `auto.arima` de la librería **`forecast`**.
+
+Esta función calcula cada uno de los componentes ARIMA de la serie:
+
+- Integración **(I)**: mediante test de raíces unitarias, se obtiene la cantidad de diferencias que se le debe aplicar a la serie para lograr estacionariedad en media.
+
+- Autorregresivo **(AR)**: se realizan análisis de la función de autocorrelación para detectar el número de periodos previos que entrarán en el modelo.
+
+- Medias móviles **(MA)**: se realizan análisis de la función de autocorrelación parcial para detectar el número de innovaciones previas que entrarán en el modelo.
+
+En el caso del ejemplo
+
+```{r}
+arima <- auto.arima(ts(train$VENTA, frequency = 7))
+```
+
+```{r echo=FALSE, fig.align='center', fig.height=4.5}
+predicciones <- data.frame(FECHA = train$FECHA,
+                           VENTA = arima$fitted, SERIE = "Predicciones")
+grown_truth <- data.frame(FECHA = train$FECHA, VENTA = train$VENTA, SERIE = "Real")
+
+ggplot(data = grown_truth %>% rbind(predicciones), aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.8, alpha = 0.9) + scale_color_tableau(direction = -1)
+```
+
+Podemos ver más detalle sobre el modelo ajustado mediante `summary`
+
+```{r}
+summary(arima)
+```
+
+El modelo ajustado fue un MA(4) para la parte regular y MA(2) para la parte estacional.
+
+Este proceso se repetirá sobre todas las series temoprales.
