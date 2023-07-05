@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="" xml:lang="">
+  <head>
+    <title>Forecasting de Ventas</title>
+    <meta charset="utf-8" />
+    <meta name="author" content="Ignacio Romero" />
+    <script src="libs/header-attrs/header-attrs.js"></script>
+    <link href="libs/remark-css/default.css" rel="stylesheet" />
+    <link href="libs/remark-css/default-fonts.css" rel="stylesheet" />
+    <script src="libs/clipboard/clipboard.min.js"></script>
+    <link href="libs/xaringanExtra-clipboard/xaringanExtra-clipboard.css" rel="stylesheet" />
+    <script src="libs/xaringanExtra-clipboard/xaringanExtra-clipboard.js"></script>
+    <script>window.xaringanExtraClipboard(null, {"button":"📋","success":"Código copiado","error":"Ctrl+C para copiar"})</script>
+  </head>
+  <body>
+    <textarea id="source">
+class: center, middle, inverse, title-slide
+
+.title[
+# Forecasting de Ventas
+]
+.subtitle[
+## TFM Minería de Datos e Inteligencia de Negocio
+]
+.author[
+### Ignacio Romero
+]
+.institute[
+### UCM
+]
+.date[
+### Junio 2023
+]
+
+---
+
+
+
+
+
+
+class: middle,center
+
+# 1) Introducción
+
+.left[
+La idea es ajustar modelos ARIMA para cada serie en concreto.
+
+Descargamos las librerías necesarias para este *script*.
+
+
+```r
+if (!require(data.table)) install.packages("data.table")
+if (!require(forecast)) install.packages("forecast")
+if (!require(ggplot2)) install.packages("ggplot2")
+if (!require(ggthemes)) install.packages("ggthemes")
+if (!require(tidyverse)) install.packages("tidyverse")
+if (!require(lubridate)) install.packages("lubridate")
+```
+]
+
+---
+
+### Ventas
+
+
+```r
+ventas &lt;- fread("datos.csv", sep = ",", data.table = F)
+```
+
+
+|   PDV    |  SKU  | ABC |   FECHA    | VENTA |
+|:--------:|:-----:|:---:|:----------:|:-----:|
+| PDV_0008 | SKU_1 |  B  | 2021-11-25 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-26 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-27 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-28 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-29 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-30 | 47.48 |
+| PDV_0008 | SKU_1 |  B  | 2021-12-01 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-12-02 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-12-03 | 47.48 |
+|   ...    |  ...  | ... |    ...     |  ...  |
+
+---
+
+class: middle
+
+# 2) Ejemplo
+
+A modo de ejemplo utilizaremos la serie temporal correspondiente al punto de venta nº108 y el producto nº1
+
+
+```r
+pdv = "PDV_0108"; sku = "SKU_1"
+serie &lt;- ventas %&gt;% filter(PDV == pdv &amp; SKU == sku)
+```
+
+&lt;img src="Modelos-estocasticos_files/figure-html/unnamed-chunk-5-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+Dividimos los datos en conjuntos **train** y **test**.
+
+
+```r
+train &lt;- serie[1:375,]
+test &lt;- serie[376:385,]
+```
+
+.pull-left[
+
+|   FECHA    | VENTA |
+|:----------:|:-----:|
+| 2021-10-22 |   0   |
+| 2021-10-23 | 1.77  |
+| 2021-10-24 |   0   |
+| 2021-10-25 |   0   |
+| 2021-10-26 |   0   |
+| 2021-10-27 |   0   |
+| 2021-10-28 | 1.77  |
+| 2021-10-29 |   0   |
+| 2021-10-30 |   0   |
+|    ...     |  ...  |
+]
+
+.pull-right[
+
+|   FECHA    | VENTA |
+|:----------:|:-----:|
+| 2022-11-01 | 0.00  |
+| 2022-11-02 | 0.00  |
+| 2022-11-03 | 0.00  |
+| 2022-11-04 | 2.66  |
+| 2022-11-05 | 0.00  |
+| 2022-11-06 | 0.00  |
+| 2022-11-07 | 0.00  |
+| 2022-11-08 | 0.00  |
+| 2022-11-09 | 0.00  |
+| 2022-11-10 | 1.77  |
+]
+
+---
+
+class: middle
+
+# 3) Auto ARIMA
+
+Los modelos se ajustarán mediante la función `auto.arima` de la librería **`forecast`**.
+
+Esta función calcula cada uno de los componentes ARIMA de la serie:
+
+- Integración **(I)**: mediante test de raíces unitarias, se obtiene la cantidad de diferencias que se le debe aplicar a la serie para lograr estacionariedad en media.
+
+- Autorregresivo **(AR)**: se realizan análisis de la función de autocorrelación para detectar el número de periodos previos que entrarán en el modelo.
+
+- Medias móviles **(MA)**: se realizan análisis de la función de autocorrelación parcial para detectar el número de innovaciones previas que entrarán en el modelo.
+
+---
+
+class: middle
+
+En el caso del ejemplo
+
+
+```r
+arima &lt;- auto.arima(ts(train$VENTA, frequency = 7))
+```
+
+&lt;img src="Modelos-estocasticos_files/figure-html/unnamed-chunk-10-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+class: middle
+
+Podemos ver más detalle sobre el modelo ajustado mediante `summary`
+
+
+```r
+summary(arima)
+```
+
+```
+## Series: ts(train$VENTA, frequency = 7) 
+## ARIMA(0,0,4)(0,0,2)[7] with non-zero mean 
+## 
+## Coefficients:
+##           ma1      ma2      ma3      ma4    sma1    sma2    mean
+##       -0.1388  -0.1578  -0.1275  -0.0774  0.1425  0.1233  0.4573
+## s.e.   0.0517   0.0521   0.0498   0.0509  0.0527  0.0501  0.0370
+## 
+## sigma^2 = 1.313:  log likelihood = -579.86
+## AIC=1175.73   AICc=1176.12   BIC=1207.14
+## 
+## Training set error measures:
+##                       ME     RMSE       MAE MPE MAPE     MASE         ACF1
+## Training set 0.001050845 1.135084 0.7285449 NaN  Inf 1.058238 -0.001609568
+```
+
+El modelo ajustado fue un MA(4) para la parte regular y MA(2) para la parte estacional.
+
+Este proceso se repetirá sobre todas las series temoprales.
+    </textarea>
+<style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script>var slideshow = remark.create({
+"highlightStyle": "github",
+"highlightLines": true,
+"countIncrementalSlides": false
+});
+if (window.HTMLWidgets) slideshow.on('afterShowSlide', function (slide) {
+  window.dispatchEvent(new Event('resize'));
+});
+(function(d) {
+  var s = d.createElement("style"), r = d.querySelector(".remark-slide-scaler");
+  if (!r) return;
+  s.type = "text/css"; s.innerHTML = "@page {size: " + r.style.width + " " + r.style.height +"; }";
+  d.head.appendChild(s);
+})(document);
+
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css"; s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+// delete the temporary CSS (for displaying all slides initially) when the user
+// starts to view slides
+(function() {
+  var deleted = false;
+  slideshow.on('beforeShowSlide', function(slide) {
+    if (deleted) return;
+    var sheets = document.styleSheets, node;
+    for (var i = 0; i < sheets.length; i++) {
+      node = sheets[i].ownerNode;
+      if (node.dataset["target"] !== "print-only") continue;
+      node.parentNode.removeChild(node);
+    }
+    deleted = true;
+  });
+})();
+// add `data-at-shortcutkeys` attribute to <body> to resolve conflicts with JAWS
+// screen reader (see PR #262)
+(function(d) {
+  let res = {};
+  d.querySelectorAll('.remark-help-content table tr').forEach(tr => {
+    const t = tr.querySelector('td:nth-child(2)').innerText;
+    tr.querySelectorAll('td:first-child .key').forEach(key => {
+      const k = key.innerText;
+      if (/^[a-z]$/.test(k)) res[k] = t;  // must be a single letter (key)
+    });
+  });
+  d.body.setAttribute('data-at-shortcutkeys', JSON.stringify(res));
+})(document);
+(function() {
+  "use strict"
+  // Replace <script> tags in slides area to make them executable
+  var scripts = document.querySelectorAll(
+    '.remark-slides-area .remark-slide-container script'
+  );
+  if (!scripts.length) return;
+  for (var i = 0; i < scripts.length; i++) {
+    var s = document.createElement('script');
+    var code = document.createTextNode(scripts[i].textContent);
+    s.appendChild(code);
+    var scriptAttrs = scripts[i].attributes;
+    for (var j = 0; j < scriptAttrs.length; j++) {
+      s.setAttribute(scriptAttrs[j].name, scriptAttrs[j].value);
+    }
+    scripts[i].parentElement.replaceChild(s, scripts[i]);
+  }
+})();
+(function() {
+  var links = document.getElementsByTagName('a');
+  for (var i = 0; i < links.length; i++) {
+    if (/^(https?:)?\/\//.test(links[i].getAttribute('href'))) {
+      links[i].target = '_blank';
+    }
+  }
+})();
+// adds .remark-code-has-line-highlighted class to <pre> parent elements
+// of code chunks containing highlighted lines with class .remark-code-line-highlighted
+(function(d) {
+  const hlines = d.querySelectorAll('.remark-code-line-highlighted');
+  const preParents = [];
+  const findPreParent = function(line, p = 0) {
+    if (p > 1) return null; // traverse up no further than grandparent
+    const el = line.parentElement;
+    return el.tagName === "PRE" ? el : findPreParent(el, ++p);
+  };
+
+  for (let line of hlines) {
+    let pre = findPreParent(line);
+    if (pre && !preParents.includes(pre)) preParents.push(pre);
+  }
+  preParents.forEach(p => p.classList.add("remark-code-has-line-highlighted"));
+})(document);</script>
+
+<script>
+slideshow._releaseMath = function(el) {
+  var i, text, code, codes = el.getElementsByTagName('code');
+  for (i = 0; i < codes.length;) {
+    code = codes[i];
+    if (code.parentNode.tagName !== 'PRE' && code.childElementCount === 0) {
+      text = code.textContent;
+      if (/^\\\((.|\s)+\\\)$/.test(text) || /^\\\[(.|\s)+\\\]$/.test(text) ||
+          /^\$\$(.|\s)+\$\$$/.test(text) ||
+          /^\\begin\{([^}]+)\}(.|\s)+\\end\{[^}]+\}$/.test(text)) {
+        code.outerHTML = code.innerHTML;  // remove <code></code>
+        continue;
+      }
+    }
+    i++;
+  }
+};
+slideshow._releaseMath(document);
+</script>
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+(function () {
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src  = 'https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-MML-AM_CHTML';
+  if (location.protocol !== 'file:' && /^https?:/.test(script.src))
+    script.src  = script.src.replace(/^https?:/, '');
+  document.getElementsByTagName('head')[0].appendChild(script);
+})();
+</script>
+  </body>
+</html>
