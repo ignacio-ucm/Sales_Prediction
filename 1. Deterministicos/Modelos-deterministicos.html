@@ -1,0 +1,1398 @@
+<!DOCTYPE html>
+<html lang="" xml:lang="">
+  <head>
+    <title>Forecasting de Ventas</title>
+    <meta charset="utf-8" />
+    <meta name="author" content="Ignacio Romero" />
+    <script src="libs/header-attrs/header-attrs.js"></script>
+    <link href="libs/remark-css/default.css" rel="stylesheet" />
+    <link href="libs/remark-css/default-fonts.css" rel="stylesheet" />
+    <script src="libs/clipboard/clipboard.min.js"></script>
+    <link href="libs/xaringanExtra-clipboard/xaringanExtra-clipboard.css" rel="stylesheet" />
+    <script src="libs/xaringanExtra-clipboard/xaringanExtra-clipboard.js"></script>
+    <script>window.xaringanExtraClipboard(null, {"button":"📋","success":"Código copiado","error":"Ctrl+C para copiar"})</script>
+  </head>
+  <body>
+    <textarea id="source">
+class: center, middle, inverse, title-slide
+
+.title[
+# Forecasting de Ventas
+]
+.subtitle[
+## TFM Minería de Datos e Inteligencia de Negocio
+]
+.author[
+### Ignacio Romero
+]
+.institute[
+### UCM
+]
+.date[
+### Junio 2023
+]
+
+---
+
+
+
+
+
+
+class: middle,center
+
+# 1) Introducción
+
+¡¡¡!!!! ENLACES A GITHUB Y PROBAR OTROS ESTILOS
+
+.left[
+La idea es explotar los modelos determinísticos al máximo, buscando el mejor rendimiento que permiten estas herramientas.
+
+El fundamento teórico detrás de cada decisión no se tratará en este documento. Para ese nivel de detalle se recomienda consultar el documento completo del [Trabajo de Fin de Master]().
+
+Descargamos las librerías necesarias para este *script*.
+
+
+```r
+if (!require(data.table)) install.packages("data.table")
+if (!require(forecast)) install.packages("forecast")
+if (!require(ggplot2)) install.packages("ggplot2")
+if (!require(ggthemes)) install.packages("ggthemes")
+if (!require(tidyverse)) install.packages("tidyverse")
+if (!require(lubridate)) install.packages("lubridate")
+```
+]
+
+---
+
+### Ventas
+
+
+```r
+ventas &lt;- fread("datos.csv", sep = ",", data.table = F)
+```
+
+
+|   PDV    |  SKU  | ABC |   FECHA    | VENTA |
+|:--------:|:-----:|:---:|:----------:|:-----:|
+| PDV_0008 | SKU_1 |  B  | 2021-11-25 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-26 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-27 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-28 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-29 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-11-30 | 47.48 |
+| PDV_0008 | SKU_1 |  B  | 2021-12-01 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-12-02 |   0   |
+| PDV_0008 | SKU_1 |  B  | 2021-12-03 | 47.48 |
+|   ...    |  ...  | ... |    ...     |  ...  |
+
+---
+
+# 2) Regresores
+
+Creamos las variables predictoras que vamos a incorporar en nuestras regresiones.
+
+--
+
+### 2.1) Tendencia
+
+Empezamos por la **tendencia**, que es simplemente un vector con los primeros números naturales hasta `\(n\)`, siendo `\(n\)` la longitud de la serie.
+
+
+```r
+tendencia &lt;- data.frame(t = 1:385)
+```
+
+En nuestro caso, la variable tendencia va de `\(1\)` a `\(385\)`, ya que es el tamaño de las series temporales, pero esto es ajustable.
+
+---
+
+# 2) Regresores
+
+Creamos las variables predictoras que vamos a incorporar en nuestras regresiones.
+
+### 2.2) Estacionalidad
+
+En segundo lugar creamos las **variables estacionales**. Para ello utilizamos la función `seasonaldummy` del paquete `forecast`.
+
+Esta función coge un objeto de tipo `ts` estacional y crea variables *dummy* para cada una de las "estaciones". En nuestro caso, se asumirá estacionalidad semanal, por lo que creamos primero una serie temporal con el atributo `frequency = 7`.
+
+
+```r
+serie_fake &lt;- ts(tendencia[,1], frequency = 7)
+```
+
+Y ahora sí podemos crear nuestras *dummies* a raíz de esta serie temporal.
+
+
+```r
+dummies &lt;- seasonaldummy(serie_fake)
+```
+
+---
+
+# 3) Ejemplo
+
+Una vez tenemos todas las variables, podemos empezar a construir nuestros modelos.
+
+A modo de ejemplo utilizaremos la serie temporal correspondiente al punto de venta nº108 y el producto nº1
+
+
+```r
+pdv = "PDV_0108"; sku = "SKU_1"
+serie &lt;- ventas %&gt;% filter(PDV == pdv &amp; SKU == sku)
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-8-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+Añadimos los regresores y dividimos los datos en los conjuntos **train** y **test**.
+
+
+```r
+serie &lt;- serie %&gt;% cbind(tendencia) %&gt;% cbind(dummies)
+
+train &lt;- serie[1:375,]
+test &lt;- serie[376:385,]
+```
+
+.pull-left[
+
+|   FECHA    | VENTA |
+|:----------:|:-----:|
+| 2021-10-22 |   0   |
+| 2021-10-23 | 1.77  |
+| 2021-10-24 |   0   |
+| 2021-10-25 |   0   |
+| 2021-10-26 |   0   |
+| 2021-10-27 |   0   |
+| 2021-10-28 | 1.77  |
+| 2021-10-29 |   0   |
+| 2021-10-30 |   0   |
+|    ...     |  ...  |
+]
+
+.pull-right[
+
+|   FECHA    | VENTA |
+|:----------:|:-----:|
+| 2022-11-01 | 0.00  |
+| 2022-11-02 | 0.00  |
+| 2022-11-03 | 0.00  |
+| 2022-11-04 | 2.66  |
+| 2022-11-05 | 0.00  |
+| 2022-11-06 | 0.00  |
+| 2022-11-07 | 0.00  |
+| 2022-11-08 | 0.00  |
+| 2022-11-09 | 0.00  |
+| 2022-11-10 | 1.77  |
+]
+
+---
+
+### 3.1) Modelo de tendencia
+
+El primer modelo a probar contiene tan solo la variable tendencia.
+
+
+```r
+trend &lt;- lm(VENTA ~ t, data = train)
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-13-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+### 3.2) Modelo estacional
+
+Este modelo contiene solo las *dummies* estacionales.
+
+
+```r
+seas &lt;- lm(VENTA ~ S1 + S2 + S3 + S4 + S5, data = train)
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-15-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+### 3.3) Modelo mixto
+
+Esta vez se incluira tanto la componente tendencial como estacional en la misma regresión.
+
+
+```r
+both &lt;- lm(VENTA ~ t + S1 + S2 + S3 + S4 + S5, data = train)
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-17-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+# 4) Comparación
+
+Para comparar los 3 modelos, se utilizarán las regresiones para predecir los 10 valores del conjunto **test**.
+
+
+```r
+predicciones &lt;- sapply(
+  list(trend, seas, both), predict, newdata = test
+) %&gt;% as.data.frame() %&gt;% setNames(c("Trend", "Seas", "Both"))
+```
+
+
+
+Visualizamos tanto la serie original (en negro) como el resto (con colores como indica la leyenda).
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-20-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+class: middle
+
+El análisis visual no siempre es suficiente, así que obtenemos las métricas con la función personalizada `save_metrics`
+
+
+```r
+save_metrics &lt;- function (prediction, grown_truth) {
+  
+  prediction &lt;- as.numeric(prediction)
+  grown_truth &lt;- as.numeric(grown_truth)
+  
+  rmse &lt;- sqrt(mean((prediction - grown_truth)^2))
+  error &lt;- sum(prediction) - sum(grown_truth)
+  error &lt;- abs(error) / sum(grown_truth) # En proporción
+  
+  return(data.frame(rmse = rmse, error = error))
+  
+}
+```
+
+---
+
+class: middle
+
+
+```r
+errores &lt;- apply(predicciones[,1:3], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %&gt;% 
+  rbindlist(idcol = TRUE) %&gt;% 
+  setNames(c("Modelo", "RMSE", "Error")) %&gt;% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+
+|Modelo |  RMSE| Error|
+|:------|-----:|-----:|
+|Trend  | 0.920| 0.341|
+|Seas   | 0.887| 0.055|
+|Both   | 0.893| 0.259|
+
+En RMSE apenas destaca ningún modelo por encima de otro. No obstante, en Error general tenemos un clarísimo ganador: el modelo estacional.
+
+---
+
+# 5) Mejoras
+
+Hasta ahora hemos visto los modelos más típicos y trillados en el campo de predicción de series temporales.
+
+A partir de aquí trataremos de mejorar estos modelos añadiendo otro tipo de variables predictoras o enfocando las regresiones de otra forma. En las siguientes secciones se muestran cada una de las propuestas.
+
+--
+
+### 5.1) Días festivos
+
+Podemos añadir una variable que indique si el día fue festivo o no, para lo cual introducimos la base de datos `festivos`, con todos los festivos de España durante 2021 y 2022.
+
+
+```r
+festivos &lt;- read.csv("festivos.csv", sep = ";") %&gt;% 
+  mutate(FECHA = as.Date(FECHA))
+```
+
+---
+
+class: middle
+
+Cruzamos la información
+
+
+```r
+serie &lt;- serie %&gt;% merge(festivos, by = "FECHA")
+train &lt;- serie[1:375,]
+test &lt;- serie[376:385,]
+```
+
+Modelizamos
+
+
+```r
+trend &lt;- lm(VENTA ~ t + FESTIVO,
+            data = train)
+
+seas &lt;- lm(VENTA ~ S1 + S2 + S3 + S4 + S5 + FESTIVO,
+           data = train)
+
+both &lt;- lm(VENTA ~ t + S1 + S2 + S3 + S4 + S5 + FESTIVO,
+           data = train)
+```
+
+---
+
+class: middle
+
+Podemos hacernos una primera idea sobre el efecto de los días festivos en la estimación de las ventas observando el coeficiente de su variable.
+
+
+```r
+betas &lt;- c(trend$coefficients["FESTIVOSI"],
+           seas$coefficients["FESTIVOSI"],
+           both$coefficients["FESTIVOSI"])
+```
+
+
+| Modelos | Coeficientes |
+|:-------:|:------------:|
+|  Trend  |    -0.557    |
+|  Seas   |    -0.457    |
+|  Both   |    -0.453    |
+
+Notamos que en los 3 casos esta variable afecta negativamente a las ventas.
+
+En otras palabras, parece que la venta del primer producto baja los días festivos para este PDV.
+
+---
+
+class: middle
+
+Predecimos ahora con cada uno de los nuevos modelos
+
+
+```r
+predicciones &lt;- sapply(list(trend, seas, both),
+                       predict, newdata = test) %&gt;% 
+  as.data.frame() %&gt;% setNames(c("TrendF", "SeasF", "BothF"))
+```
+
+Juntamos las predicciones y el *grown truth* en la misma tabla para construir correctamente el gráfico.
+
+
+```r
+predicciones &lt;- predicciones %&gt;% cbind(FECHA = test$FECHA)
+df_grafico_aux &lt;- predicciones %&gt;% 
+  pivot_longer(cols = c(TrendF, SeasF, BothF),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico &lt;- rbind(df_grafico, df_grafico_aux)
+```
+
+---
+
+class: middle
+Y visualizamos tanto la serie original (en negro) como el resto (con colores como indica la leyenda).
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-31-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+El cambio no es muy sustancial, pese a haber 2 días festivos en el conjunto Test.
+
+---
+
+class: middle
+
+Veamos también las métricas.
+
+
+```r
+errores2 &lt;- apply(predicciones[,1:3], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %&gt;% 
+  rbindlist(idcol = TRUE) %&gt;% 
+  setNames(c("Modelo", "RMSE", "Error")) %&gt;% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+.pull-left[
+
+|Modelo |  RMSE| Error|
+|:------|-----:|-----:|
+|Trend  | 0.920| 0.341|
+|Seas   | 0.887| 0.055|
+|Both   | 0.893| 0.259|
+]
+
+.pull-right[
+
+|Modelo |  RMSE| Error|
+|:------|-----:|-----:|
+|TrendF | 0.865| 0.186|
+|SeasF  | 0.876| 0.226|
+|BothF  | 0.870| 0.085|
+]
+
+&amp;nbsp;
+
+En RMSE seguimos prácticamente igual, aunque hemos conseguido mejorar mucho los modelos en cuanto a Error general.
+
+De hecho, tanto el modelo de tendencia como el mixto han mejorado mucho, gracias a los días festivos donde las estimaciones bajan y se acercan más a la realidad.
+
+---
+
+### 5.2) Otras estacionalidades
+
+Al principio se asumió estacionalidad semanal, pero nunca se sabe si la estacionalidad de nuestra serie es más compleja.
+
+Quizás las ventas cumplen ciclos de 15 días o de 3.
+
+Por ello, probamos con un bucle distintas frecuencias para nuestras series.
+
+
+```r
+# Preparamos el input
+serie &lt;- ventas %&gt;% filter(PDV == pdv &amp; SKU == sku)
+
+# Preparamos el output
+predicciones &lt;- data.frame(Real = test$VENTA)
+
+# Distintas estacionalidades
+seas_grid &lt;- c(3,5,10,15,30)
+```
+
+---
+
+class: middle
+
+Por ello, probamos con un bucle distintas frecuencias para nuestras series.
+
+
+```r
+for (sea in seas_grid) {
+  
+  # Nuevas dummies
+  serie_fake &lt;- ts(tendencia[,1], frequency = sea)
+  dummies &lt;- seasonaldummy(serie_fake)
+  
+  # Ajuste del Input
+  serie &lt;- serie %&gt;% select(FECHA, VENTA) %&gt;% 
+    cbind(tendencia) %&gt;% cbind(dummies)
+  train &lt;- serie[1:375,]
+  test &lt;- serie[376:385,]
+  
+  # Modelos
+  seas &lt;- lm(VENTA ~ ., data = train %&gt;% select(-c(FECHA,t)))
+  both &lt;- lm(VENTA ~ ., data = train %&gt;% select(-FECHA))
+  
+  # Output
+  predicciones_aux &lt;- data.frame(predict(seas, test),
+                                 predict(both, test)) %&gt;% 
+    setNames(paste0(c("Seas","Both"), sea))
+  predicciones &lt;- cbind(predicciones, predicciones_aux)
+  
+}
+```
+
+---
+
+class: middle
+
+Y evaluamos todos los modelos
+
+
+```r
+errores3 &lt;- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %&gt;% 
+  rbindlist(idcol = TRUE) %&gt;% 
+  setNames(c("Modelo", "RMSE", "Error")) %&gt;% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+.pull-left[
+
+|Modelo |  RMSE| Error|
+|:------|-----:|-----:|
+|Seas3  | 0.916| 0.032|
+|Seas5  | 0.943| 0.035|
+|Seas10 | 0.949| 0.037|
+|Seas15 | 1.026| 0.024|
+|Seas30 | 1.112| 0.166|
+]
+
+.pull-right[
+
+|Modelo |  RMSE| Error|
+|:------|-----:|-----:|
+|Both3  | 0.927| 0.337|
+|Both5  | 0.955| 0.338|
+|Both10 | 0.961| 0.340|
+|Both15 | 1.033| 0.280|
+|Both30 | 1.129| 0.470|
+]
+
+&amp;nbsp;
+
+Según el RMSE los mejores modelos son con bajas estacionalidades, mientras que según el Error general no está tan claro. Hay más varianza.
+
+---
+
+class: middle
+
+Visualmente...
+
+
+```r
+# Nos quedamos con frequency=15 y frequency=30
+indice &lt;- grep(paste(c(15,30), collapse = "|"),
+               colnames(predicciones))
+predicciones &lt;- predicciones[,indice]
+```
+
+
+```r
+predicciones &lt;- predicciones %&gt;% cbind(FECHA = test$FECHA)
+df_grafico_aux &lt;- predicciones %&gt;% 
+  pivot_longer(cols = c(Seas15, Both15, Seas30, Both30),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico &lt;- df_grafico %&gt;% rbind(df_grafico_aux)
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-42-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+¿Y si juntamos las 2 mejoras?&lt;sup&gt;*&lt;/sup&gt;
+
+
+```r
+# Preparamos el input
+serie &lt;- ventas %&gt;% filter(PDV == pdv &amp; SKU == sku)
+
+# Preparamos el output
+predicciones &lt;- data.frame(Real = test$VENTA)
+```
+
+
+```r
+for (sea in seas_grid) {
+  serie_fake &lt;- ts(tendencia[,1], frequency = sea)
+  dummies &lt;- seasonaldummy(serie_fake)
+  serie &lt;- serie %&gt;% select(FECHA, VENTA) %&gt;% 
+    cbind(tendencia) %&gt;% cbind(dummies) %&gt;% 
+*   merge(festivos[,1:2], by = "FECHA")
+  train &lt;- serie[1:375,]
+  test &lt;- serie[376:385,]
+  seas &lt;- lm(VENTA ~ ., data = train %&gt;% select(-c(t,FECHA)))
+  both &lt;- lm(VENTA ~ ., data = train %&gt;% select(-FECHA))
+  predicciones_aux &lt;- data.frame(predict(seas, test),
+                                 predict(both, test)) %&gt;% 
+    setNames(paste0(c("SeasF","BothF"), sea))
+  predicciones &lt;- cbind(predicciones, predicciones_aux)
+}
+```
+
+.footnote[&lt;sup&gt;*&lt;/sup&gt; Mismo código que en la diapositiva 21, añadiendo la linea subrayada en amarillo]
+
+---
+
+class: middle
+
+Y evaluamos todos los modelos
+
+
+```r
+errores4 &lt;- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %&gt;% 
+  rbindlist(idcol = TRUE) %&gt;% 
+  setNames(c("Modelo", "RMSE", "Error")) %&gt;% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+.pull-left[
+
+|Modelo |  RMSE| Error|
+|:------|-----:|-----:|
+|Seas3  | 0.916| 0.032|
+|Seas5  | 0.943| 0.035|
+|Seas10 | 0.949| 0.037|
+|Seas15 | 1.026| 0.024|
+|Seas30 | 1.112| 0.166|
+]
+
+.pull-right[
+
+|Modelo  |  RMSE| Error|
+|:-------|-----:|-----:|
+|SeasF3  | 0.857| 0.119|
+|SeasF5  | 0.934| 0.122|
+|SeasF10 | 0.948| 0.120|
+|SeasF15 | 1.017| 0.193|
+|SeasF30 | 1.120| 0.010|
+]
+
+&amp;nbsp;
+
+En general, mantenemos las mismas conclusiones que antes. Añadir los días festivos mejora el RMSE pero empeora el Error general.
+
+---
+
+class: middle
+
+Y evaluamos todos los modelos
+
+
+```r
+errores4 &lt;- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %&gt;% 
+  rbindlist(idcol = TRUE) %&gt;% 
+  setNames(c("Modelo", "RMSE", "Error")) %&gt;% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+.pull-left[
+
+|Modelo |  RMSE| Error|
+|:------|-----:|-----:|
+|Both3  | 0.927| 0.337|
+|Both5  | 0.955| 0.338|
+|Both10 | 0.961| 0.340|
+|Both15 | 1.033| 0.280|
+|Both30 | 1.129| 0.470|
+]
+
+.pull-right[
+
+|Modelo  |  RMSE| Error|
+|:-------|-----:|-----:|
+|BothF3  | 0.858| 0.184|
+|BothF5  | 0.936| 0.179|
+|BothF10 | 0.949| 0.181|
+|BothF15 | 1.014| 0.109|
+|BothF30 | 1.129| 0.311|
+]
+
+&amp;nbsp;
+
+En general, mantenemos las mismas conclusiones que antes. Añadir los días festivos mejora el RMSE pero empeora el Error general.
+
+---
+
+class: middle
+
+Visualmente...
+
+
+```r
+indice &lt;- grep(paste(c(15,30), collapse = "|"),
+               colnames(predicciones))
+predicciones &lt;- predicciones[,indice]
+```
+
+
+```r
+predicciones &lt;- predicciones %&gt;% cbind(FECHA = test$FECHA)
+df_grafico_aux &lt;- predicciones %&gt;% 
+  pivot_longer(cols = c(SeasF15, BothF15, SeasF30, BothF30),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico &lt;- df_grafico %&gt;% rbind(df_grafico_aux)
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-53-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+---
+
+### 5.3) Step-wise
+
+En el peor de los casos estamos incluyendo hasta 32 variables explicativas, lo cual puede ser demasiado, así que tiene sentido plantearse utilizar una preselección de variables.
+
+La función `step` nos permite hacer esto implementando el algoritmo de selección de variables *Step-Wise*.
+
+
+```r
+# Preparamos el input
+serie &lt;- ventas %&gt;% filter(PDV == pdv &amp; SKU == sku)
+serie_con_dias &lt;- serie %&gt;% 
+  mutate(DAY = as.factor(day(FECHA)))
+
+# Preparamos el output
+predicciones &lt;- data.frame(Real = test$VENTA)
+```
+
+---
+
+class: middle
+
+De nuevo, ejecutamos el mismo código que se muestra en la diapositiva 21, con el añadido de las líneas subrayadas en amarillo
+
+
+```r
+for (sea in seas_grid) {
+  
+  serie_fake &lt;- ts(tendencia[,1], frequency = sea)
+  dummies &lt;- seasonaldummy(serie_fake)
+  
+  serie &lt;- serie %&gt;% select(FECHA, VENTA) %&gt;% 
+    cbind(tendencia) %&gt;% cbind(dummies) %&gt;% 
+    merge(festivos[,1:2], by = "FECHA")
+  train &lt;- serie[1:375,]
+  test &lt;- serie[376:385,]
+  
+* null &lt;- lm(VENTA ~ 1, data = train)
+* full &lt;- lm(VENTA ~ ., data = train %&gt;% select(-FECHA))
+* scope &lt;- list(lower = null, upper = full)
+* wise &lt;- step(null, scope = scope,
+*              direction = "both", trace = F)
+  
+  predicciones_aux &lt;- data.frame(predict(wise, test)) %&gt;% 
+    setNames(paste0("Step",sea))
+  predicciones &lt;- cbind(predicciones, predicciones_aux)
+  
+}
+```
+
+---
+
+class: middle
+
+Y evaluamos todos los modelos
+
+
+```r
+errores5 &lt;- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %&gt;% 
+  rbindlist(idcol = TRUE) %&gt;% 
+  setNames(c("Modelo", "RMSE", "Error")) %&gt;% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+
+&lt;table class="kable_wrapper"&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td&gt; 
+
+&lt;table style='display:inline;margin:8px'&gt;
+ &lt;thead&gt;
+  &lt;tr&gt;
+   &lt;th style="text-align:left;"&gt; Modelo &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; RMSE &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; Error &lt;/th&gt;
+  &lt;/tr&gt;
+ &lt;/thead&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; SeasF3 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.857 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.119 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; SeasF5 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.934 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.122 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; SeasF10 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.948 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.120 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; SeasF15 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.017 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.193 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; SeasF30 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.120 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.010 &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+
+ &lt;/td&gt;
+   &lt;td&gt; 
+
+&lt;table style='display:inline;margin:8px'&gt;
+ &lt;thead&gt;
+  &lt;tr&gt;
+   &lt;th style="text-align:left;"&gt; Modelo &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; RMSE &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; Error &lt;/th&gt;
+  &lt;/tr&gt;
+ &lt;/thead&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; BothF3 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.858 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.184 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; BothF5 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.936 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.179 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; BothF10 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.949 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.181 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; BothF15 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.014 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.109 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; BothF30 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.129 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.311 &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+
+ &lt;/td&gt;
+   &lt;td&gt; 
+
+&lt;table style='display:inline;margin:8px'&gt;
+ &lt;thead&gt;
+  &lt;tr&gt;
+   &lt;th style="text-align:left;"&gt; Modelo &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; RMSE &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; Error &lt;/th&gt;
+  &lt;/tr&gt;
+ &lt;/thead&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; Step3 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.863 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.118 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; Step5 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.950 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.122 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; Step10 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.951 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.122 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; Step15 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.962 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.152 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; Step30 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.062 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.019 &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+
+ &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+
+En muchos casos esta idea parece haber funcionado como se esperaba, mejorando ligeramente los modelos.
+
+---
+
+class: middle
+
+Visualmente...
+
+
+
+
+```r
+predicciones &lt;- predicciones %&gt;% cbind(FECHA = test$FECHA)
+df_grafico_aux &lt;- predicciones %&gt;% 
+  pivot_longer(cols = c(Step3, Step5, Step10, Step15, Step30),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico &lt;- df_grafico %&gt;% rbind(df_grafico_aux)
+```
+
+
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-61-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+En cualquier caso, esto son tan solo pruebas. Para evaluar los modelos debe hacerse un estudio completo con todas las series temporales de nuestra base de datos.
+
+---
+
+# 6) Función **`tdm`**
+
+Recapitulando, un modelo determinístico para predicción de series temporales puede tener las siguientes opciones
+
+- **Tendencia**: se puede incluir o no una variable referente a la tendencia.
+
+- **Estacionalidad**: se pueden incluir o no variables referentes a la estacionalidad. Además, se puede configurar el tamaño de los ciclos según el tipo de estacionalidad (ciclos semanales, quincenales, etc.)
+
+- **Otros regresores**: se pueden añadir otras variables *dummy* u otras series temporales que correlacionen con las ventas. En nuestro caso, la variable predictiva que se ha probado a añadir es la de días festivos.
+
+- **Step-Wise**: se puede hacer una selección de variables previa a la regresión.
+
+---
+
+class: middle
+
+La idea de este apartado final es crear una función que admita modificar y combinar todas esas opciones vistas en la diapositiva anterior.
+
+Es decir, queremos hacer algo parecido a un algoritmo de **Machine Learning** con hiperparámetros tuneables. Llamaremos a esta función **`tdm`**, por sus siglas **Tunable Deterministic Model**
+
+A continuación se muestran estas distintas opciones adaptadas en forma de hiperparámetros:
+
+- **Trend**: `logical` ¿Se debe incluir variable tendencia?
+
+- **Seasonality**: `numeric`. Tamaño de los ciclos estacionales. Si no se desea incluir estacionalidad: `Seasonality=1`
+
+- **Day_Freq**: `logical`. Si `Day_Freq=TRUE`, el hiperparámetro *Frequency* es ignorado y se crean *dummies* para cada día del mes. Es una versión mejorada de usar valor cercanos a 30 en "Frequency".
+
+- **X.Reg**: `logical` ¿Se deben incluir regresores extra? Si `X.Reg=TRUE`, debe existir el objeto *x.reg*
+
+
+- **StepAIC**: `logical` ¿Se debe hacer selección de variables Step-Wise?
+
+---
+
+class: middle
+
+Creamos una malla o ***grid*** de hiperparámetros como se suele hacer con los algoritmos de Machine Learning.
+
+
+```r
+# Las mayúsculas y minúsculas de
+# los hiperparámetros no afectan
+grid &lt;- expand.grid(trend = c(T,F),
+                    seasonality = 1:30,
+                    day_freq = c(T,F),
+                    x.reg = c(T,F),
+                    stepAIC = c(T,F))
+```
+
+Esto es muy útil para hacernos una idea de cómo va a funcionar **`tdm`**
+
+Como la función va a contener un código muy largo, no se mostrará en las diapositivas. De modo que, si se desea ver la función por dentro, es recomendable revisar el archivo **.Rmd** y no el **html**
+
+
+
+---
+
+class: middle
+
+***Disclaimer*** - Esta función es personalizada por el autor de este trabajo y su utilidad, en principio, no va más allá de este estudio. Es por ello que no se ha decidido incluir ninguna clase de chequeos ni de *warnings*.
+
+A continuación se muestran algunos requisitos básicos para que el código funcione correctamente:
+
+- La función está pensada para series temporales de dato diario, a poder ser con histórico mayor al mes
+
+- *tuneGrid* debe ser un data.frame con los nombres de columnas correspondientes a los nombres de los hiperparámetros
+
+- Si *tuneGrid* contiene la opción `day_freq=TRUE`, el input *x* debe tener formato de fecha
+
+- *x* e *y* deben ser vectores con el mismo tamaño y sin valores NA
+
+- *x.reg* debe ser un vector, matriz o data.frame con el mismo número de filas que el tamaño de *y* y sin valores NA
+
+- *validation_split* debe ser un vector numérico con las posiciones de *x* e *y* que se utilizarán como conjunto test. No admite variables booleanas
+
+- *metric* debe valer "error" o "rmse"
+
+---
+
+class: middle
+
+Es importante comentar que el formato del *output* de la función está basado en los algoritmos de la librería `caret`. Concretamente, se trata de una lista con 11 objetos.
+
+Los primeros 6 objetos contienen los inputs que la función recibió. En cuanto a los otros 5:
+
+- **pred**: contiene un data.frame con las predicciones de todos los modelos probados, identificados por las primeras columnas las cuales contienen los hiperparámetros de cada modelo.
+
+- **modelos**: contiene una lista con todos los objetos `lm`, es decir, con todos los modelos que se han probado.
+
+- **results**: contiene un data.frame con los resultados, en términos de RMSE y Error general, de cada uno de los modelos (identificados también por los hiperparámetros, como en *pred*).
+
+- **bestModel**: es un extracto de la lista *modelos*, con el objeto `lm` correspondiente al mejor modelo (según *metric*).
+
+- **bestTune**: es un extracto del data.frame *results*, con la fila del modelo cuyo desempeño ha sido mejor (según *metric*).
+
+---
+
+### 6.1) Uso de la función **`tdm`**
+
+Podemos dar 2 enfoques distintos a nuestra nueva función.
+
+1. **Pre-tuneado**. Hacer un estudio previo sobre qué hiperparámetros dan mejores resultados, y aplicar el modelo con esos hiperparámetros en todas las series temporales y sus conjuntos test.
+
+2. **Auto-tuneado**. Buscar los mejores hiperparámetros en cada serie, y aplicar dicho modelo a su conjunto test.
+
+&amp;nbsp;
+
+
+| Entrenamiento | Validación |  Test   |
+|:-------------:|:----------:|:-------:|
+|   365 días    |  10 días   | 10 días |
+
+---
+
+### 6.1) Uso de la función **`tdm`**
+
+Podemos dar 2 enfoques distintos a nuestra nueva función.
+
+1. **Pre-tuneado**. Hacer un estudio previo sobre qué hiperparámetros dan mejores resultados, y aplicar el modelo con esos hiperparámetros en todas las series temporales y sus conjuntos test.
+
+2. **Auto-tuneado**. Buscar los mejores hiperparámetros en cada serie, y aplicar dicho modelo a su conjunto test.
+
+Es decir, utilizaremos **`tdm`** sobre los conjuntos de validación en cada una de nuestras series temporales. Del resultado nos quedaremos tan solo con 2 elementos:
+
+- **results**, para nuestro estudio previo de hiperparámetros (enfoque 1). Tras haber estudiado este objeto en todas las series temporales, podremos decantarnos por un modelo determinístico, al cual llamaremos "modelo pretuneado" y utilizaremos para predecir el conjunto test de todas las series
+
+- **bestModel**, nos guardaremos el mejor modelo en cada serie para predecir el conjunto test de esa serie concreta (enfoque 2)
+
+---
+
+class: center, middle
+
+.pull-left[
+ENFOQUE 1
+
+**Pre-tuneado**
+
+.left[
+- &lt;span style='color:red'&gt;Tratamiento de todas las series por igual&lt;/span&gt; 
+
+- &lt;span style='color:red'&gt;Ambigüedad para elegir el modelo pretuneado&lt;/span&gt; 
+
+- &lt;span style='color:red'&gt;Hay sesgo humano, la decisión puede sesgarse por el aspecto de los gráficos, por ejemplo&lt;/span&gt; 
+
+- &lt;span style='color:green'&gt;No hay sesgo de datos&lt;/span&gt;
+
+- &lt;span style='color:green'&gt;Decisión basada en la información de todas las series, a la vez&lt;/span&gt;
+]
+
+]
+
+.pull-right[
+ENFOQUE 2
+
+**Auto-tuneado**
+
+.left[
+- &lt;span style='color:green'&gt;El algoritmo se adapta a las características de cada serie&lt;/span&gt;
+
+- &lt;span style='color:green'&gt;El algoritmo elige los modelos con datos numéricos&lt;/span&gt;
+
+- &lt;span style='color:green'&gt;No hay sesgo humano, la función toma todas las decisiones&lt;/span&gt;
+
+- &lt;span style='color:red'&gt;Hay un fuerte sesgo en los datos&lt;/span&gt;
+
+- &lt;span style='color:red'&gt;Decisión basada en la información de cada serie, por separado. Alta dependencia del conjunto de validación&lt;/span&gt;
+]
+
+]
+
+---
+
+### 6.2) Tuneado de **`tdm`**
+
+Sea cual sea el enfoque, es necesario utilizar la función sobre todas las series temporales para guardar los 2 items que se comentaron con anterioridad (**results** y **bestModel**).
+
+Además, debemos asegurarnos de utilizar solo los conjuntos train y validación. No tendría sentido tunear con el conjunto test, que es el que estamos reservando para evaluar los modelos definitivos.
+
+.center[**/!\ Adevertencia /!\**]
+
+`tdm` puede llegar a tener un altísimo coste computacional, ya que prueba muchas combinaciones de modelos. Hagamos las cuentas:
+
+Con el grid que definimos anteriormente,
+
+
+```r
+grid &lt;- expand.grid(trend = c(T,F),
+                    x.reg = c(T,F),
+                    frequency = 1:30,
+                    day_freq = c(T,F),
+                    stepAIC = c(T,F))
+```
+
+
+tenemos 480 combinaciones de hiperparámetros.
+
+
+---
+
+No todas estas combinaciones se tienen en cuenta, pues veíamos que cuando `day_freq=T`, `seasonality` era ignorado.
+
+
+```r
+grid$frequency[grid$day_freq] = 1
+grid &lt;- grid[!duplicated(grid),]
+grid &lt;- grid[grid$trend | grid$x.reg | grid$day_freq | grid$frequency &gt; 1,]
+```
+
+Esto nos deja con un total de 246 combinaciones. Sin embargo, se calculan mucho más que 246 regresiones.
+
+Esto se debe a que, cuando se realiza *Step-Wise*, se comparan muchos modelos de regresión distintos. Concretamente, se realizan `\(2+k(k+1)\)` modelos&lt;sup&gt;*&lt;/sup&gt; , donde `\(k\)` es el número de variables.
+
+
+```r
+# Número de variables en cada combinacion de hiperaparámetros
+k &lt;- apply(grid, MARGIN = 1,
+           function(x) sum(x*c(1,1,1,30,0))-1)
+# Número de modelos en cada combinación de hiperparámetros
+g &lt;- ifelse(grid$stepAIC, 2+k*(k+1), 1)
+```
+
+&amp;nbsp;
+
+.footnote[
+&lt;sup&gt;*&lt;/sup&gt;Se realizan `\(1+\frac{p(p+1)}{2}\)` modelos dos veces. Una con el algoritmo Step-forward y otra con Step-backward. En total, `\(2(1+\frac{k(k+1)}{2})=2+k(k+1)\)`
+]
+
+---
+
+class: middle
+
+Por tanto, con esa malla de hiperparámetros, la cantidad de modelos de regresión que se está calculando es de 44079 por serie.
+
+Teniendo en cuenta que contamos con 5007 series, en total le vamos a pedir a nuestra máquina que ajuste 220703553 modelos de regresión distintos.
+
+Ni falta hace explicar lo exigente que puede llegar a ser este proceso, el cual puede llegar a tardar varias horas.
+
+Para evitarle esta ardua tarea al usuario, en github está disponible un archivo **.RData** con el resultado en cuestión. Si se quisiera profundizar en el código que utiliza `tdm` sobre todas las series, en el archivo .Rmd está completo.
+
+
+
+
+```r
+load("Pretuneado.RData")
+```
+
+
+
+---
+
+### 6.3) Análisis del tuneado
+
+Tenemos muchos hiperparámetros, por lo que para discernir bien las diferencias debemos ir poco a poco.
+
+Primero haremos un análisis de la estacionalidad, comparando los distintos valores de tamaños de los ciclos (incluiremos el caso de `day_freq=T` como `seasonality='FULL'`)
+
+
+```r
+results$seasonality[results$seasonality == 0] &lt;- 'FULL'
+```
+
+
+```r
+stats_agrupadas &lt;- results %&gt;% 
+  mutate(across(where(is.character), as.factor)) %&gt;% 
+  group_by(SKU, ABC, seasonality) %&gt;% 
+  summarise(ERROR.media = mean(ERROR),
+            ERROR.mediana = median(ERROR),
+            RMSE.media = mean(RMSE),
+            RMSE.mediana = median(RMSE))
+```
+
+---
+
+class: middle
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-73-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+Resulta muy interesante ver que casi todos los modelos son iguales a excepción de 3, que son precisamente los de estacionalidad semanal. Es decir, aquellos en los que seasonality es 7 o algún múltiplo de 7.
+
+---
+
+class: middle
+
+
+```r
+stats_agrupadas &lt;- results %&gt;% filter(seasonality == 7) %&gt;% 
+  group_by(SKU, ABC, stepaic) %&gt;% 
+  summarise(ERROR.media = mean(ERROR),
+            ERROR.mediana = median(ERROR),
+            RMSE.media = mean(RMSE),
+            RMSE.mediana = median(RMSE))
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-75-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+Utilizar el algoritmo stepAIC no aporta nada al modelo. Esto se debe a que, aunque una variable no sea importante, parece no haber problema 
+
+---
+
+class: middle
+
+
+```r
+stats_agrupadas &lt;- results %&gt;% filter(seasonality == 7) %&gt;% 
+  group_by(SKU, ABC, trend, x.reg) %&gt;% 
+  summarise(ERROR.media = mean(ERROR),
+            ERROR.mediana = median(ERROR),
+            RMSE.media = mean(RMSE),
+            RMSE.mediana = median(RMSE))
+```
+
+&lt;img src="Modelos-deterministicos_files/figure-html/unnamed-chunk-77-1.png" width="100%" style="display: block; margin: auto;" /&gt;
+
+Añadir el regresor extra no consigue mejorar el modelo. Sin embargo, dejar fuera la variable tendencia sí lo logra.
+
+---
+
+class: middle
+
+En definitiva, hemos podido ver gráficamente que el mejor modelo determinístico, en general, es el modelo estacional con ciclos semanales, sin más regresores ni procesos de preselección de variables.
+
+
+```r
+tops &lt;- results %&gt;% group_by(PDV,SKU) %&gt;% 
+  slice_min(RMSE, n = 1, with_ties = F)
+
+tops %&gt;% group_by(trend, x.reg, seasonality, day_freq, stepaic) %&gt;% 
+  count() %&gt;% ungroup() %&gt;% slice_max(n, n = 5)
+```
+
+```
+## # A tibble: 5 × 6
+##   trend x.reg seasonality day_freq stepaic     n
+##   &lt;lgl&gt; &lt;lgl&gt; &lt;chr&gt;       &lt;lgl&gt;    &lt;lgl&gt;   &lt;int&gt;
+## 1 TRUE  TRUE  28          FALSE    TRUE      141
+## 2 TRUE  TRUE  28          FALSE    FALSE     131
+## 3 TRUE  TRUE  21          FALSE    TRUE      122
+## 4 TRUE  TRUE  21          FALSE    FALSE     115
+## 5 FALSE FALSE 28          FALSE    FALSE      93
+```
+
+Los modelos más escogidos son estacionales semanales, con distintas combinaciones de los otros regresores.
+    </textarea>
+<style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script>var slideshow = remark.create({
+"highlightStyle": "github",
+"highlightLines": true,
+"countIncrementalSlides": false
+});
+if (window.HTMLWidgets) slideshow.on('afterShowSlide', function (slide) {
+  window.dispatchEvent(new Event('resize'));
+});
+(function(d) {
+  var s = d.createElement("style"), r = d.querySelector(".remark-slide-scaler");
+  if (!r) return;
+  s.type = "text/css"; s.innerHTML = "@page {size: " + r.style.width + " " + r.style.height +"; }";
+  d.head.appendChild(s);
+})(document);
+
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css"; s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+// delete the temporary CSS (for displaying all slides initially) when the user
+// starts to view slides
+(function() {
+  var deleted = false;
+  slideshow.on('beforeShowSlide', function(slide) {
+    if (deleted) return;
+    var sheets = document.styleSheets, node;
+    for (var i = 0; i < sheets.length; i++) {
+      node = sheets[i].ownerNode;
+      if (node.dataset["target"] !== "print-only") continue;
+      node.parentNode.removeChild(node);
+    }
+    deleted = true;
+  });
+})();
+// add `data-at-shortcutkeys` attribute to <body> to resolve conflicts with JAWS
+// screen reader (see PR #262)
+(function(d) {
+  let res = {};
+  d.querySelectorAll('.remark-help-content table tr').forEach(tr => {
+    const t = tr.querySelector('td:nth-child(2)').innerText;
+    tr.querySelectorAll('td:first-child .key').forEach(key => {
+      const k = key.innerText;
+      if (/^[a-z]$/.test(k)) res[k] = t;  // must be a single letter (key)
+    });
+  });
+  d.body.setAttribute('data-at-shortcutkeys', JSON.stringify(res));
+})(document);
+(function() {
+  "use strict"
+  // Replace <script> tags in slides area to make them executable
+  var scripts = document.querySelectorAll(
+    '.remark-slides-area .remark-slide-container script'
+  );
+  if (!scripts.length) return;
+  for (var i = 0; i < scripts.length; i++) {
+    var s = document.createElement('script');
+    var code = document.createTextNode(scripts[i].textContent);
+    s.appendChild(code);
+    var scriptAttrs = scripts[i].attributes;
+    for (var j = 0; j < scriptAttrs.length; j++) {
+      s.setAttribute(scriptAttrs[j].name, scriptAttrs[j].value);
+    }
+    scripts[i].parentElement.replaceChild(s, scripts[i]);
+  }
+})();
+(function() {
+  var links = document.getElementsByTagName('a');
+  for (var i = 0; i < links.length; i++) {
+    if (/^(https?:)?\/\//.test(links[i].getAttribute('href'))) {
+      links[i].target = '_blank';
+    }
+  }
+})();
+// adds .remark-code-has-line-highlighted class to <pre> parent elements
+// of code chunks containing highlighted lines with class .remark-code-line-highlighted
+(function(d) {
+  const hlines = d.querySelectorAll('.remark-code-line-highlighted');
+  const preParents = [];
+  const findPreParent = function(line, p = 0) {
+    if (p > 1) return null; // traverse up no further than grandparent
+    const el = line.parentElement;
+    return el.tagName === "PRE" ? el : findPreParent(el, ++p);
+  };
+
+  for (let line of hlines) {
+    let pre = findPreParent(line);
+    if (pre && !preParents.includes(pre)) preParents.push(pre);
+  }
+  preParents.forEach(p => p.classList.add("remark-code-has-line-highlighted"));
+})(document);</script>
+
+<script>
+slideshow._releaseMath = function(el) {
+  var i, text, code, codes = el.getElementsByTagName('code');
+  for (i = 0; i < codes.length;) {
+    code = codes[i];
+    if (code.parentNode.tagName !== 'PRE' && code.childElementCount === 0) {
+      text = code.textContent;
+      if (/^\\\((.|\s)+\\\)$/.test(text) || /^\\\[(.|\s)+\\\]$/.test(text) ||
+          /^\$\$(.|\s)+\$\$$/.test(text) ||
+          /^\\begin\{([^}]+)\}(.|\s)+\\end\{[^}]+\}$/.test(text)) {
+        code.outerHTML = code.innerHTML;  // remove <code></code>
+        continue;
+      }
+    }
+    i++;
+  }
+};
+slideshow._releaseMath(document);
+</script>
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+(function () {
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src  = 'https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-MML-AM_CHTML';
+  if (location.protocol !== 'file:' && /^https?:/.test(script.src))
+    script.src  = script.src.replace(/^https?:/, '');
+  document.getElementsByTagName('head')[0].appendChild(script);
+})();
+</script>
+  </body>
+</html>
