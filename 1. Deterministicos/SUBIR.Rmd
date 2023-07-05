@@ -1,0 +1,1012 @@
+---
+title: "Forecasting de Ventas"
+author: "Ignacio Romero"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1) Introducción
+
+La idea es explotar los modelos determinísticos al máximo, buscando el mejor rendimiento que permiten estas herramientas.
+
+El fundamento teórico detrás de cada decisión no se tratará en este documento. Para ese nivel de detalle se recomienda consultar el documento completo del Trabajo de Fin de Master.
+
+Descargamos las librerías necesarias para este *script*.
+
+```{r message=FALSE, warning=FALSE}
+if (!require(data.table)) install.packages("data.table")
+if (!require(forecast)) install.packages("forecast")
+if (!require(ggplot2)) install.packages("ggplot2")
+if (!require(ggthemes)) install.packages("ggthemes")
+if (!require(tidyverse)) install.packages("tidyverse")
+if (!require(lubridate)) install.packages("lubridate")
+```
+
+Descargamos las ventas
+
+```{r}
+ventas <- fread("datos.csv", sep = ",", data.table = F)
+```
+
+```{r}
+ventas_tabla <- ventas[35:43,1:5] %>% mutate(FECHA = as.character(FECHA)) %>% 
+  rbind(rep("...",5))
+knitr::kable(ventas_tabla, align = "c", row.names = F)
+```
+
+# 2) Regresores
+
+Creamos las variables predictoras que vamos a incorporar en nuestras regresiones.
+
+### 2.1) Tendencia
+
+Empezamos por la **tendencia**, que es simplemente un vector con los primeros números naturales hasta $n$, siendo $n$ la longitud de la serie.
+
+```{r}
+tendencia <- data.frame(t = 1:385)
+```
+
+En nuestro caso, la variable tendencia va de $1$ a $385$, ya que es el tamaño de las series temporales, pero esto es ajustable.
+
+### 2.2) Estacionalidad
+
+En segundo lugar creamos las **variables estacionales**. Para ello utilizamos la función `seasonaldummy` del paquete `forecast`.
+
+Esta función coge un objeto de tipo `ts` estacional y crea variables *dummy* para cada una de las "estaciones". En nuestro caso, se asumirá estacionalidad semanal, por lo que creamos primero una serie temporal con el atributo `frequency = 7`.
+
+```{r}
+serie_fake <- ts(tendencia[,1], frequency = 7)
+```
+
+Y ahora sí podemos crear nuestras *dummies* a raíz de esta serie temporal.
+
+```{r}
+dummies <- seasonaldummy(serie_fake)
+```
+
+# 3) Ejemplo
+
+Una vez tenemos todas las variables, podemos empezar a construir nuestros modelos.
+
+A modo de ejemplo utilizaremos la serie temporal correspondiente al punto de venta nº108 y el producto nº1
+
+```{r}
+pdv = "PDV_0108"; sku = "SKU_1"
+serie <- ventas %>% filter(PDV == pdv & SKU == sku)
+```
+
+```{r}
+ggplot(data = serie, aes(x = FECHA, y = VENTA)) + geom_line() + geom_point(size = 0.5) + 
+  labs(title = paste(pdv, sku, sep = " - "), subtitle = paste("Segmento", unique(serie$ABC)))
+```
+
+Añadimos los regresores y dividimos los datos en los conjuntos **train** y **test**.
+
+```{r}
+serie <- serie %>% cbind(tendencia) %>% cbind(dummies)
+
+train <- serie[1:375,]
+test <- serie[376:385,]
+```
+
+```{r}
+train_tabla <- train[1:9,] %>% 
+  mutate(FECHA = as.character(FECHA)) %>% 
+  select(FECHA, VENTA) %>% rbind(rep("...",2))
+knitr::kable(train_tabla, align = "c")
+```
+
+```{r}
+test_tabla <- test %>% select(FECHA, VENTA)
+knitr::kable(test_tabla, align = "c", row.names = F)
+```
+
+### 3.1) Modelo de tendencia
+
+El primer modelo a probar contiene tan solo la variable tendencia.
+
+```{r}
+trend <- lm(VENTA ~ t, data = train)
+```
+
+```{r}
+predicciones <- data.frame(FECHA = train$FECHA,
+                           VENTA = trend$fitted.values, SERIE = "Predicciones")
+grown_truth <- data.frame(FECHA = train$FECHA, VENTA = train$VENTA, SERIE = "Real")
+ggplot(data = grown_truth %>% rbind(predicciones), aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.8, alpha = 0.9) + scale_color_tableau(direction = -1)
+```
+
+### 3.2) Modelo estacional
+
+Este modelo contiene solo las *dummies* estacionales.
+
+```{r}
+seas <- lm(VENTA ~ S1 + S2 + S3 + S4 + S5, data = train)
+```
+
+```{r}
+predicciones$VENTA = seas$fitted.values
+ggplot(data = grown_truth %>% rbind(predicciones), aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.8, alpha = 0.9) + scale_color_tableau(direction = -1)
+```
+
+### 3.3) Modelo mixto
+
+Esta vez se incluira tanto la componente tendencial como estacional en la misma regresión.
+
+```{r}
+both <- lm(VENTA ~ t + S1 + S2 + S3 + S4 + S5, data = train)
+```
+
+```{r}
+predicciones$VENTA = both$fitted.values
+ggplot(data = grown_truth %>% rbind(predicciones), aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.8, alpha = 0.9) + scale_color_tableau(direction = -1)
+```
+
+# 4) Comparación
+
+Para comparar los 3 modelos, se utilizarán las regresiones para predecir los 10 valores del conjunto **test**.
+
+```{r}
+predicciones <- sapply(
+  list(trend, seas, both), predict, newdata = test
+) %>% as.data.frame() %>% setNames(c("Trend", "Seas", "Both"))
+```
+
+```{r}
+# Añadimos las predicciones y el *grown truth* en
+# la misma tabla para construir correctamente el gráfico.
+predicciones <- predicciones %>% cbind(FECHA = test$FECHA, Real = test$VENTA)
+df_grafico <- predicciones %>% 
+  pivot_longer(cols = c(Real, Trend, Seas, Both), names_to = "SERIE", values_to = "VENTA")
+```
+
+Visualizamos tanto la serie original (en negro) como el resto (con colores como indica la leyenda).
+
+```{r}
+colores <- setNames(c("black", "coral", "deepskyblue", "gold"),
+                    c("Real", "Trend", "Seas", "Both"))
+ggplot(data = df_grafico, aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.8) + scale_color_manual(values = colores)
+```
+
+El análisis visual no siempre es suficiente, así que obtenemos las métricas con la función personalizada `save_metrics`
+
+```{r}
+save_metrics <- function (prediction, grown_truth) {
+  
+  prediction <- as.numeric(prediction)
+  grown_truth <- as.numeric(grown_truth)
+  
+  rmse <- sqrt(mean((prediction - grown_truth)^2))
+  error <- sum(prediction) - sum(grown_truth)
+  error <- abs(error) / sum(grown_truth) # En proporción
+  
+  return(data.frame(rmse = rmse, error = error))
+  
+}
+```
+
+```{r}
+errores <- apply(predicciones[,1:3], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %>% 
+  rbindlist(idcol = TRUE) %>% 
+  setNames(c("Modelo", "RMSE", "Error")) %>% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+```{r}
+knitr::kable(errores, allign = "c")
+```
+
+En RMSE apenas destaca ningún modelo por encima de otro. No obstante, en Error general tenemos un clarísimo ganador: el modelo estacional.
+
+# 5) Mejoras
+
+Hasta ahora hemos visto los modelos más típicos y trillados en el campo de predicción de series temporales.
+
+A partir de aquí trataremos de mejorar estos modelos añadiendo otro tipo de variables predictoras o enfocando las regresiones de otra forma. En las siguientes secciones se muestran cada una de las propuestas.
+
+### 5.1) Días festivos
+
+Podemos añadir una variable que indique si el día fue festivo o no, para lo cual introducimos la base de datos `festivos`, con todos los festivos de España durante 2021 y 2022.
+
+```{r}
+festivos <- read.csv("festivos.csv", sep = ";") %>% 
+  mutate(FECHA = as.Date(FECHA))
+```
+
+Cruzamos la información
+
+```{r}
+serie <- serie %>% merge(festivos, by = "FECHA")
+train <- serie[1:375,]
+test <- serie[376:385,]
+```
+
+Modelizamos
+
+```{r}
+trend <- lm(VENTA ~ t + FESTIVO,
+            data = train)
+
+seas <- lm(VENTA ~ S1 + S2 + S3 + S4 + S5 + FESTIVO,
+           data = train)
+
+both <- lm(VENTA ~ t + S1 + S2 + S3 + S4 + S5 + FESTIVO,
+           data = train)
+```
+
+Podemos hacernos una primera idea sobre el efecto de los días festivos en la estimación de las ventas observando el coeficiente de su variable.
+
+```{r}
+betas <- c(trend$coefficients["FESTIVOSI"],
+           seas$coefficients["FESTIVOSI"],
+           both$coefficients["FESTIVOSI"])
+```
+
+```{r}
+betas <- data.frame(Modelos = c("Trend", "Seas", "Both"),
+                    Coeficientes = round(betas, 3))
+knitr::kable(betas, align = "c")
+```
+
+Notamos que en los 3 casos esta variable afecta negativamente a las ventas.
+
+En otras palabras, parece que la venta del primer producto baja los días festivos para este PDV.
+
+Predecimos ahora con cada uno de los nuevos modelos
+
+```{r}
+predicciones <- sapply(list(trend, seas, both),
+                       predict, newdata = test) %>% 
+  as.data.frame() %>% setNames(c("TrendF", "SeasF", "BothF"))
+```
+
+Juntamos las predicciones y el *grown truth* en la misma tabla para construir correctamente el gráfico.
+
+```{r}
+predicciones <- predicciones %>% cbind(FECHA = test$FECHA)
+df_grafico_aux <- predicciones %>% 
+  pivot_longer(cols = c(TrendF, SeasF, BothF),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico <- rbind(df_grafico, df_grafico_aux)
+```
+
+Y visualizamos tanto la serie original (en negro) como el resto (con colores como indica la leyenda).
+
+```{r}
+colores <- setNames(c("black", "coral", "deepskyblue", "gold", "coral4", "deepskyblue4", "gold4"),
+                    c("Real", "Trend", "Seas", "Both", "TrendF", "SeasF", "BothF"))
+ggplot(data = df_grafico, aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.75) + scale_color_manual(values = colores)
+```
+
+El cambio no es muy sustancial, pese a haber 2 días festivos en el conjunto Test.
+
+Veamos también las métricas.
+
+```{r}
+errores2 <- apply(predicciones[,1:3], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %>% 
+  rbindlist(idcol = TRUE) %>% 
+  setNames(c("Modelo", "RMSE", "Error")) %>% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+```{r}
+knitr::kable(errores, allign = "c")
+```
+
+```{r}
+knitr::kable(errores2, allign = "c")
+```
+
+En RMSE seguimos prácticamente igual, aunque hemos conseguido mejorar mucho los modelos en cuanto a Error general.
+
+De hecho, tanto el modelo de tendencia como el mixto han mejorado mucho, gracias a los días festivos donde las estimaciones bajan y se acercan más a la realidad.
+
+### 5.2) Otras estacionalidades
+
+Al principio se asumió estacionalidad semanal, pero nunca se sabe si la estacionalidad de nuestra serie es más compleja.
+
+Quizás las ventas cumplen ciclos de 15 días o de 3.
+
+Por ello, probamos con un bucle distintas frecuencias para nuestras series.
+
+```{r}
+# Preparamos el input
+serie <- ventas %>% filter(PDV == pdv & SKU == sku)
+
+# Preparamos el output
+predicciones <- data.frame(Real = test$VENTA)
+
+# Distintas estacionalidades
+seas_grid <- c(3,5,10,15,30)
+```
+
+Por ello, probamos con un bucle distintas frecuencias para nuestras series.
+
+```{r warning=FALSE}
+for (sea in seas_grid) {
+  
+  # Nuevas dummies
+  serie_fake <- ts(tendencia[,1], frequency = sea)
+  dummies <- seasonaldummy(serie_fake)
+  
+  # Ajuste del Input
+  serie <- serie %>% select(FECHA, VENTA) %>% 
+    cbind(tendencia) %>% cbind(dummies)
+  train <- serie[1:375,]
+  test <- serie[376:385,]
+  
+  # Modelos
+  seas <- lm(VENTA ~ ., data = train %>% select(-c(FECHA,t)))
+  both <- lm(VENTA ~ ., data = train %>% select(-FECHA))
+  
+  # Output
+  predicciones_aux <- data.frame(predict(seas, test),
+                                 predict(both, test)) %>% 
+    setNames(paste0(c("Seas","Both"), sea))
+  predicciones <- cbind(predicciones, predicciones_aux)
+  
+}
+```
+
+Y evaluamos todos los modelos
+
+```{r}
+errores3 <- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %>% 
+  rbindlist(idcol = TRUE) %>% 
+  setNames(c("Modelo", "RMSE", "Error")) %>% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+```{r}
+errores3.1 <- errores3 %>% filter(grepl("Seas", Modelo))
+knitr::kable(errores3.1, allign = "c")
+```
+
+```{r}
+errores3.2 <- errores3 %>% filter(grepl("Both", Modelo))
+knitr::kable(errores3.2, allign = "c")
+```
+
+Según el RMSE los mejores modelos son con bajas estacionalidades, mientras que según el Error general no está tan claro. Hay más varianza.
+
+Visualmente...
+
+```{r}
+# Nos quedamos con frequency=15 y frequency=30
+indice <- grep(paste(c(15,30), collapse = "|"),
+               colnames(predicciones))
+predicciones <- predicciones[,indice]
+```
+
+```{r}
+predicciones <- predicciones %>% cbind(FECHA = test$FECHA)
+df_grafico_aux <- predicciones %>% 
+  pivot_longer(cols = c(Seas15, Both15, Seas30, Both30),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico <- df_grafico %>% rbind(df_grafico_aux)
+```
+
+```{r}
+colores <- setNames(c("black", ggthemes_data$tableau$`color-palettes`$regular$`Tableau 10`$value),
+                    unique(df_grafico$SERIE))
+ggplot(data = df_grafico, aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.75) + scale_color_manual(values = colores)
+```
+
+¿Y si juntamos las 2 mejoras?
+
+```{r}
+# Preparamos el input
+serie <- ventas %>% filter(PDV == pdv & SKU == sku)
+
+# Preparamos el output
+predicciones <- data.frame(Real = test$VENTA)
+```
+
+```{r}
+for (sea in seas_grid) {
+  serie_fake <- ts(tendencia[,1], frequency = sea)
+  dummies <- seasonaldummy(serie_fake)
+  serie <- serie %>% select(FECHA, VENTA) %>% 
+    cbind(tendencia) %>% cbind(dummies) %>% 
+    merge(festivos[,1:2], by = "FECHA") #<<
+  train <- serie[1:375,]
+  test <- serie[376:385,]
+  seas <- lm(VENTA ~ ., data = train %>% select(-c(t,FECHA)))
+  both <- lm(VENTA ~ ., data = train %>% select(-FECHA))
+  predicciones_aux <- data.frame(predict(seas, test),
+                                 predict(both, test)) %>% 
+    setNames(paste0(c("SeasF","BothF"), sea))
+  predicciones <- cbind(predicciones, predicciones_aux)
+}
+```
+
+Y evaluamos todos los modelos
+
+```{r}
+errores4 <- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %>% 
+  rbindlist(idcol = TRUE) %>% 
+  setNames(c("Modelo", "RMSE", "Error")) %>% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+```{r}
+knitr::kable(errores3 %>% filter(grepl("Seas", Modelo)))
+```
+
+```{r}
+knitr::kable(errores4 %>% filter(grepl("Seas", Modelo)))
+```
+
+En general, mantenemos las mismas conclusiones que antes. Añadir los días festivos mejora el RMSE pero empeora el Error general.
+
+Y evaluamos todos los modelos
+
+```{r}
+errores4 <- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %>% 
+  rbindlist(idcol = TRUE) %>% 
+  setNames(c("Modelo", "RMSE", "Error")) %>% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+```{r}
+knitr::kable(errores3 %>% filter(grepl("Both", Modelo)))
+```
+
+```{r}
+knitr::kable(errores4 %>% filter(grepl("Both", Modelo)))
+```
+
+En general, mantenemos las mismas conclusiones que antes. Añadir los días festivos mejora el RMSE pero empeora el Error general.
+
+Visualmente...
+
+```{r}
+indice <- grep(paste(c(15,30), collapse = "|"),
+               colnames(predicciones))
+predicciones <- predicciones[,indice]
+```
+
+```{r}
+predicciones <- predicciones %>% cbind(FECHA = test$FECHA)
+df_grafico_aux <- predicciones %>% 
+  pivot_longer(cols = c(SeasF15, BothF15, SeasF30, BothF30),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico <- df_grafico %>% rbind(df_grafico_aux)
+```
+
+```{r}
+colores <- ggthemes_data$tableau$`color-palettes`$regular$`Tableau 20`$value[1:14]
+colores <- setNames(c("black", colores),
+                    unique(df_grafico$SERIE))
+ggplot(data = df_grafico, aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.75) + scale_color_manual(values = colores) +
+  labs(color = "")
+```
+
+### 5.3) Step-wise
+
+En el peor de los casos estamos incluyendo hasta 32 variables explicativas, lo cual puede ser demasiado, así que tiene sentido plantearse utilizar una preselección de variables.
+
+La función `step` nos permite hacer esto implementando el algoritmo de selección de variables *Step-Wise*.
+
+```{r}
+# Preparamos el input
+serie <- ventas %>% filter(PDV == pdv & SKU == sku)
+serie_con_dias <- serie %>% 
+  mutate(DAY = as.factor(day(FECHA)))
+
+# Preparamos el output
+predicciones <- data.frame(Real = test$VENTA)
+```
+
+De nuevo, ejecutamos el mismo código que se muestra en la diapositiva 21, con el añadido de las líneas subrayadas en amarillo
+
+```{r}
+for (sea in seas_grid) {
+  
+  serie_fake <- ts(tendencia[,1], frequency = sea)
+  dummies <- seasonaldummy(serie_fake)
+  
+  serie <- serie %>% select(FECHA, VENTA) %>% 
+    cbind(tendencia) %>% cbind(dummies) %>% 
+    merge(festivos[,1:2], by = "FECHA")
+  train <- serie[1:375,]
+  test <- serie[376:385,]
+  
+  null <- lm(VENTA ~ 1, data = train) #<<
+  full <- lm(VENTA ~ ., data = train %>% select(-FECHA)) #<<
+  scope <- list(lower = null, upper = full) #<<
+  wise <- step(null, scope = scope, #<<
+               direction = "both", trace = F) #<<
+  
+  predicciones_aux <- data.frame(predict(wise, test)) %>% 
+    setNames(paste0("Step",sea))
+  predicciones <- cbind(predicciones, predicciones_aux)
+  
+}
+```
+
+Y evaluamos todos los modelos
+
+```{r}
+errores5 <- apply(predicciones[,-1], MARGIN = 2,
+                 save_metrics, grown_truth = test$VENTA) %>% 
+  rbindlist(idcol = TRUE) %>% 
+  setNames(c("Modelo", "RMSE", "Error")) %>% 
+  mutate(across(where(is.numeric), round, 3))
+```
+
+```{r}
+uno <- knitr::kable(errores4 %>% filter(grepl("Seas", Modelo)), format = "html",
+             allign = "c", table.attr = "style='display:inline;margin:8px'")
+dos <- knitr::kable(errores4 %>% filter(grepl("Both", Modelo)), format = "html",
+             allign = "c", table.attr = "style='display:inline;margin:8px'")
+tres <- knitr::kable(errores5, allign = "c",  format = "html",
+                     table.attr = "style='display:inline;margin:8px'")
+
+knitr::kables(list(uno,dos,tres))
+```
+
+En muchos casos esta idea parece haber funcionado como se esperaba, mejorando ligeramente los modelos.
+
+Visualmente...
+
+```{r}
+predicciones <- predicciones[,-1]
+predicciones <- predicciones %>% cbind(FECHA = test$FECHA)
+df_grafico_aux <- predicciones %>% 
+  pivot_longer(cols = c(Step3, Step5, Step10, Step15, Step30),
+               names_to = "SERIE", values_to = "VENTA")
+df_grafico <- df_grafico %>% rbind(df_grafico_aux)
+```
+
+```{r}
+# Acortamos más, por economización del espacio
+df_grafico_aux_aux <- df_grafico %>% 
+  filter(SERIE %in% c("Real", "Trend", "Seas", "Both",
+                      unique(df_grafico_aux$SERIE)))
+```
+
+```{r}
+colores <- setNames(c("black", "coral", "deepskyblue", "gold",
+                      "hotpink", "hotpink1", "hotpink2", "hotpink3", "hotpink4"),
+                    unique(df_grafico_aux_aux$SERIE))
+ggplot(data = df_grafico_aux_aux, aes(x = FECHA, y = VENTA, color = SERIE)) + 
+  geom_line(linewidth = 0.75) + scale_color_manual(values = colores)
+```
+
+En cualquier caso, esto son tan solo pruebas. Para evaluar los modelos debe hacerse un estudio completo con todas las series temporales de nuestra base de datos.
+
+# 6) Función **`tdm`**
+
+Recapitulando, un modelo determinístico para predicción de series temporales puede tener las siguientes opciones
+
+- **Tendencia**: se puede incluir o no una variable referente a la tendencia.
+
+- **Estacionalidad**: se pueden incluir o no variables referentes a la estacionalidad. Además, se puede configurar el tamaño de los ciclos según el tipo de estacionalidad (ciclos semanales, quincenales, etc.)
+
+- **Otros regresores**: se pueden añadir otras variables *dummy* u otras series temporales que correlacionen con las ventas. En nuestro caso, la variable predictiva que se ha probado a añadir es la de días festivos.
+
+- **Step-Wise**: se puede hacer una selección de variables previa a la regresión.
+
+La idea de este apartado final es crear una función que admita modificar y combinar todas esas opciones vistas en la diapositiva anterior.
+
+Es decir, queremos hacer algo parecido a un algoritmo de **Machine Learning** con hiperparámetros tuneables. Llamaremos a esta función **`tdm`**, por sus siglas **Tunable Deterministic Model**
+
+A continuación se muestran estas distintas opciones adaptadas en forma de hiperparámetros:
+
+- **Trend**: `logical` ¿Se debe incluir variable tendencia?
+
+- **Seasonality**: `numeric`. Tamaño de los ciclos estacionales. Si no se desea incluir estacionalidad: `Seasonality=1`
+
+- **Day_Freq**: `logical`. Si `Day_Freq=TRUE`, el hiperparámetro *Frequency* es ignorado y se crean *dummies* para cada día del mes. Es una versión mejorada de usar valor cercanos a 30 en "Frequency".
+
+- **X.Reg**: `logical` ¿Se deben incluir regresores extra? Si `X.Reg=TRUE`, debe existir el objeto *x.reg*
+
+
+- **StepAIC**: `logical` ¿Se debe hacer selección de variables Step-Wise?
+
+Creamos una malla o ***grid*** de hiperparámetros como se suele hacer con los algoritmos de Machine Learning.
+
+```{r}
+# Las mayúsculas y minúsculas de
+# los hiperparámetros no afectan
+grid <- expand.grid(trend = c(T,F),
+                    seasonality = 1:30,
+                    day_freq = c(T,F),
+                    x.reg = c(T,F),
+                    stepAIC = c(T,F))
+```
+
+Esto es muy útil para hacernos una idea de cómo va a funcionar **`tdm`**
+
+Como la función va a contener un código muy largo, no se mostrará en las diapositivas. De modo que, si se desea ver la función por dentro, es recomendable revisar el archivo **.Rmd** y no el **html**
+
+```{r}
+tdm <- function(x, y, x.reg, validation_split, tuneGrid, metric){
+  
+  names(tuneGrid) <- tolower(names(tuneGrid))
+  metric <- toupper(metric)
+  
+  tuneGrid$seasonality[tuneGrid$day_freq] = 0 # cuando day_freq=T ignoramos seasonality
+  tuneGrid <- tuneGrid[!duplicated(tuneGrid),]
+  tuneGrid <- tuneGrid[tuneGrid$trend | tuneGrid$x.reg | tuneGrid$day_freq | tuneGrid$seasonality > 1,]
+  
+  # Vamos preprando algunos regresores
+  t <- 1:length(x) # tendencia
+  if (any(tuneGrid$day_freq))
+    dias <- as.factor(day(x)) # estacionalidad diaria
+  
+  # Inicializamos outputs
+  results <- tuneGrid
+  results$RMSE <- results$ERROR <- numeric(nrow(results))
+  modelos <- list()
+  pred <- data.frame()
+  
+  # message(paste("Probando", nrow(tuneGrid), "modelos"))
+  for (tune in 1:nrow(tuneGrid)) {
+    
+    df <- data.frame(Y = y)
+    
+    # Tendencia
+    if (tuneGrid$trend[tune])
+      df <- cbind(df, t)
+    
+    # Estacionalidad
+    if (tuneGrid$day_freq[tune]) {
+      df <- cbind(df, dias)
+    } else if (tuneGrid$seasonality[tune] > 1) {
+      dummies <- seasonaldummy(ts(t, frequency = tuneGrid$seasonality[tune]))
+      df <- cbind(df, dummies)
+    }
+    
+    # Otros regresores
+    if (tuneGrid$x.reg[tune])
+      df <- cbind(df, x.reg)
+    
+    # Modelo
+    if (tuneGrid$stepaic[tune]) {
+      full <- lm(Y ~ ., df[-validation_split,])
+      null <- lm(Y ~ 1, df[-validation_split,])
+      modelo <- step(full, scope = list(lower = null, upper = full),
+                     direction = "backward", trace = F)
+    } else {
+      modelo <- lm(Y ~ ., df[-validation_split,])
+    }
+    prediccion <- predict(modelo, newdata = df[validation_split,])
+    pred_aux <- tuneGrid[tune,] %>% cbind(x = x[validation_split], pred = prediccion) %>% suppressWarnings()
+    pred <- rbind(pred, pred_aux)
+    modelos[[tune]] <- modelo
+    
+    
+    # Evaluacion
+    results$RMSE[tune] <- sqrt(mean((y[validation_split] - prediccion)^2))
+    results$ERROR[tune] <- abs(sum(y[validation_split]) - sum(prediccion))/(sum(y[validation_split]))
+    
+  }
+  
+  if (metric == "RMSE")
+    best <- which.min(results$RMSE)
+  if (metric == "ERROR")
+    best <- which.min(results$ERROR)
+  
+  bestTune <- results[best,]
+  bestModel <- modelos[[best]]
+  
+  results <- results[order(results[,metric]),]
+  
+  out <- list(x, y, x.reg, tuneGrid, validation_split, metric, modelos, pred, results, bestTune, bestModel)
+  names(out) <- c("x", "y", "x.reg", "tuneGrid", "validation_split", "metric", "modelos", "pred", "results", "bestTune", "bestModel")
+  return(out)
+  
+}
+```
+
+***Disclaimer*** - Esta función es personalizada por el autor de este trabajo y su utilidad, en principio, no va más allá de este estudio. Es por ello que no se ha decidido incluir ninguna clase de chequeos ni de *warnings*.
+
+A continuación se muestran algunos requisitos básicos para que el código funcione correctamente:
+
+- La función está pensada para series temporales de dato diario, a poder ser con histórico mayor al mes
+
+- *tuneGrid* debe ser un data.frame con los nombres de columnas correspondientes a los nombres de los hiperparámetros
+
+- Si *tuneGrid* contiene la opción `day_freq=TRUE`, el input *x* debe tener formato de fecha
+
+- *x* e *y* deben ser vectores con el mismo tamaño y sin valores NA
+
+- *x.reg* debe ser un vector, matriz o data.frame con el mismo número de filas que el tamaño de *y* y sin valores NA
+
+- *validation_split* debe ser un vector numérico con las posiciones de *x* e *y* que se utilizarán como conjunto test. No admite variables booleanas
+
+- *metric* debe valer "error" o "rmse"
+
+Es importante comentar que el formato del *output* de la función está basado en los algoritmos de la librería `caret`. Concretamente, se trata de una lista con 11 objetos.
+
+Los primeros 6 objetos contienen los inputs que la función recibió. En cuanto a los otros 5:
+
+- **pred**: contiene un data.frame con las predicciones de todos los modelos probados, identificados por las primeras columnas las cuales contienen los hiperparámetros de cada modelo.
+
+- **modelos**: contiene una lista con todos los objetos `lm`, es decir, con todos los modelos que se han probado.
+
+- **results**: contiene un data.frame con los resultados, en términos de RMSE y Error general, de cada uno de los modelos (identificados también por los hiperparámetros, como en *pred*).
+
+- **bestModel**: es un extracto de la lista *modelos*, con el objeto `lm` correspondiente al mejor modelo (según *metric*).
+
+- **bestTune**: es un extracto del data.frame *results*, con la fila del modelo cuyo desempeño ha sido mejor (según *metric*).
+
+### 6.1) Uso de la función **`tdm`**
+
+Podemos dar 2 enfoques distintos a nuestra nueva función.
+
+1. **Pre-tuneado**. Hacer un estudio previo sobre qué hiperparámetros dan mejores resultados, y aplicar el modelo con esos hiperparámetros en todas las series temporales y sus conjuntos test.
+
+2. **Auto-tuneado**. Buscar los mejores hiperparámetros en cada serie, y aplicar dicho modelo a su conjunto test.
+
+```{r}
+tabla <- data.frame(Entrenamiento = "365 días",
+                    Validación = "10 días",
+                    Test = "10 días")
+knitr::kable(tabla, align = "c")
+```
+
+### 6.1) Uso de la función **`tdm`**
+
+Podemos dar 2 enfoques distintos a nuestra nueva función.
+
+1. **Pre-tuneado**. Hacer un estudio previo sobre qué hiperparámetros dan mejores resultados, y aplicar el modelo con esos hiperparámetros en todas las series temporales y sus conjuntos test.
+
+2. **Auto-tuneado**. Buscar los mejores hiperparámetros en cada serie, y aplicar dicho modelo a su conjunto test.
+
+Es decir, utilizaremos **`tdm`** sobre los conjuntos de validación en cada una de nuestras series temporales. Del resultado nos quedaremos tan solo con 2 elementos:
+
+- **results**, para nuestro estudio previo de hiperparámetros (enfoque 1). Tras haber estudiado este objeto en todas las series temporales, podremos decantarnos por un modelo determinístico, al cual llamaremos "modelo pretuneado" y utilizaremos para predecir el conjunto test de todas las series
+
+- **bestModel**, nos guardaremos el mejor modelo en cada serie para predecir el conjunto test de esa serie concreta (enfoque 2)
+
+ENFOQUE 1
+
+**Pre-tuneado**
+
+- <span style='color:red'>Tratamiento de todas las series por igual</span> 
+
+- <span style='color:red'>Ambigüedad para elegir el modelo pretuneado</span> 
+
+- <span style='color:red'>Hay sesgo humano, la decisión puede sesgarse por el aspecto de los gráficos, por ejemplo</span> 
+
+- <span style='color:green'>No hay sesgo de datos</span>
+
+- <span style='color:green'>Decisión basada en la información de todas las series, a la vez</span>
+
+ENFOQUE 2
+
+**Auto-tuneado**
+
+- <span style='color:green'>El algoritmo se adapta a las características de cada serie</span>
+
+- <span style='color:green'>El algoritmo elige los modelos con datos numéricos</span>
+
+- <span style='color:green'>No hay sesgo humano, la función toma todas las decisiones</span>
+
+- <span style='color:red'>Hay un fuerte sesgo en los datos</span>
+
+- <span style='color:red'>Decisión basada en la información de cada serie, por separado. Alta dependencia del conjunto de validación</span>
+
+### 6.2) Tuneado de **`tdm`**
+
+Sea cual sea el enfoque, es necesario utilizar la función sobre todas las series temporales para guardar los 2 items que se comentaron con anterioridad (**results** y **bestModel**).
+
+Además, debemos asegurarnos de utilizar solo los conjuntos train y validación. No tendría sentido tunear con el conjunto test, que es el que estamos reservando para evaluar los modelos definitivos.
+
+.center[**/!\ Adevertencia /!\**]
+
+`tdm` puede llegar a tener un altísimo coste computacional, ya que prueba muchas combinaciones de modelos. Hagamos las cuentas:
+
+Con el grid que definimos anteriormente,
+
+```{r}
+grid <- expand.grid(trend = c(T,F),
+                    x.reg = c(T,F),
+                    frequency = 1:30,
+                    day_freq = c(T,F),
+                    stepAIC = c(T,F))
+```
+
+tenemos `r nrow(grid)` combinaciones de hiperparámetros.
+
+No todas estas combinaciones se tienen en cuenta, pues veíamos que cuando `day_freq=T`, `seasonality` era ignorado.
+
+```{r}
+grid$frequency[grid$day_freq] = 1
+grid <- grid[!duplicated(grid),]
+grid <- grid[grid$trend | grid$x.reg | grid$day_freq | grid$frequency > 1,]
+```
+
+Esto nos deja con un total de `r nrow(grid)` combinaciones. Sin embargo, se calculan mucho más que `r nrow(grid)` regresiones.
+
+Esto se debe a que, cuando se realiza *Step-Wise*, se comparan muchos modelos de regresión distintos. Concretamente, se realizan $2+k(k+1)$ modelos, donde $k$ es el número de variables.
+
+```{r}
+# Número de variables en cada combinacion de hiperaparámetros
+k <- apply(grid, MARGIN = 1,
+           function(x) sum(x*c(1,1,1,30,0))-1)
+# Número de modelos en cada combinación de hiperparámetros
+g <- ifelse(grid$stepAIC, 2+k*(k+1), 1)
+```
+
+Se realizan $1+\frac{p(p+1)}{2}$ modelos dos veces. Una con el algoritmo Step-forward y otra con Step-backward. En total, $2(1+\frac{k(k+1)}{2})=2+k(k+1)$
+
+Por tanto, con esa malla de hiperparámetros, la cantidad de modelos de regresión que se está calculando es de `r sum(g)` por serie.
+
+Teniendo en cuenta que contamos con 5007 series, en total le vamos a pedir a nuestra máquina que ajuste `r sum(g)*5007` modelos de regresión distintos.
+
+Ni falta hace explicar lo exigente que puede llegar a ser este proceso, el cual puede llegar a tardar varias horas.
+
+Para evitarle esta ardua tarea al usuario, en github está disponible un archivo **.RData** con el resultado en cuestión.
+
+```{r eval=FALSE}
+load("Pretuneado.RData")
+```
+
+Si se quisiera profundizar en el código que utiliza `tdm` sobre todas las series, el siguiente *chunk* muestra un bucle con el detalle.
+
+```{r eval=FALSE}
+# CÓDIGO DE USO DE tdm SOBRE TODAS LAS SERIES
+
+# Lectura de datos
+ventas <- fread("datos.csv", sep=",", data.table = F) %>% 
+  filter(FECHA <= as.Date("2022-10-31")) # No queremos el conjunto Test
+festivos <- read.csv("festivos.csv", sep = ";") %>% 
+  mutate(FECHA = as.Date(FECHA)) %>% 
+  filter(FECHA >= as.Date("2021-10-22") & FECHA <= as.Date("2022-10-31")) %>% 
+  pull(FESTIVO)
+
+# Cada SKU se ejecutará con un Cores del procesador distintos
+skus <- unique(ventas$SKU)
+
+# Paralelización
+{cl <- makeCluster(min(length(skus), detectCores() - 2))
+registerDoParallel(cl)}
+
+# Malla de hiperparámetros
+grid <- expand.grid(trend = c(T,F),
+                    x.reg = c(T,F),
+                    seasonality = 1:30,
+                    day_freq = c(T,F),
+                    stepAIC = c(T,F))
+
+start <- Sys.time() # Verbosity
+results_list <- foreach (sku = skus, .packages = c("dplyr","lubridate","forecast","data.table")) %dopar% {
+  
+  ventas.sku <- ventas[ventas$SKU == sku,]
+  pdvs <- unique(ventas.sku$PDV)
+  results_list_aux <- list() # Inicializamos output
+  
+  rm(ventas) # Ahorro memoria
+  
+  for (pdv in pdvs) {
+    
+    ventas.pdv <- ventas.sku[ventas.sku$PDV == pdv,]
+    
+    # Si no tiene datos de entrenmaiento, pasamos
+    if (all(ventas.pdv$VENTA[1:365] == 0)) next
+    
+    abc <- unique(ventas.pdv$ABC) # Guardamos segmento
+    
+    modelo <- tdm(x = ventas.pdv$FECHA, y = ventas.pdv$VENTA,
+                  x.reg = festivos, validation_split = 366:375,
+                  tuneGrid = grid, metric = "rmse") # Nuestro modelo
+    
+    # Añadimos info a nuestros resultados para poder hacer un análisis más profundo
+    modelo$results$PDV <- pdv
+    modelo$results$SKU <- sku
+    modelo$results$ABC <- abc
+    
+    # Guardamos output
+    results_list_aux[[length(results_list_aux)+1]] <- modelo$results
+
+    rm(modelo, ventas.pdv) # Ahorro memoria
+    
+  }
+  
+  # Agregamos los outputs de todos los PDV para ese SKU
+  results_aux <- rbindlist(results_list_aux) %>% as.data.frame()
+  
+  rm(results_list_aux, ventas.sku, pdvs, ventas.pdv) # Ahorro memoria
+  
+  # Guardamos dichos outputs
+  return(results_aux)
+  
+}
+end <- Sys.time() # Verbosity
+print(end - start) # Verbosity
+
+# Agregamos los outputs de todos los SKU
+results <- rbindlist(results_list)
+# Y guardamos dichos outputs en un .RData
+save(results, file = "Pretuneado.RData")
+```
+
+### 6.3) Análisis del tuneado
+
+Tenemos muchos hiperparámetros, por lo que para discernir bien las diferencias debemos ir poco a poco.
+
+Primero haremos un análisis de la estacionalidad, comparando los distintos valores de tamaños de los ciclos (incluiremos el caso de `day_freq=T` como `seasonality='FULL'`)
+
+```{r}
+results$seasonality[results$seasonality == 0] <- 'FULL'
+```
+
+```{r message=FALSE}
+stats_agrupadas <- results %>% 
+  mutate(across(where(is.character), as.factor)) %>% 
+  group_by(SKU, ABC, seasonality) %>% 
+  summarise(ERROR.media = mean(ERROR),
+            ERROR.mediana = median(ERROR),
+            RMSE.media = mean(RMSE),
+            RMSE.mediana = median(RMSE))
+```
+
+```{r}
+ggplot(data = stats_agrupadas,
+       aes(x = seasonality, y = RMSE.media)) + geom_boxplot(fill = "coral")
+```
+
+Resulta muy interesante ver que casi todos los modelos son iguales a excepción de 3, que son precisamente los de estacionalidad semanal. Es decir, aquellos en los que seasonality es 7 o algún múltiplo de 7.
+
+```{r message=FALSE}
+stats_agrupadas <- results %>% filter(seasonality == 7) %>% 
+  group_by(SKU, ABC, stepaic) %>% 
+  summarise(ERROR.media = mean(ERROR),
+            ERROR.mediana = median(ERROR),
+            RMSE.media = mean(RMSE),
+            RMSE.mediana = median(RMSE))
+```
+
+```{r}
+ggplot(data = stats_agrupadas,
+       aes(x = stepaic, y = RMSE.media, fill = stepaic)) + 
+  geom_boxplot() + guides(fill = "none")
+```
+
+Utilizar el algoritmo stepAIC no aporta nada al modelo. Esto se debe a que, aunque una variable no sea importante, parece no haber problema 
+
+```{r message=FALSE}
+stats_agrupadas <- results %>% filter(seasonality == 7) %>% 
+  group_by(SKU, ABC, trend, x.reg) %>% 
+  summarise(ERROR.media = mean(ERROR),
+            ERROR.mediana = median(ERROR),
+            RMSE.media = mean(RMSE),
+            RMSE.mediana = median(RMSE))
+```
+
+```{r}
+ggplot(data = stats_agrupadas,
+       aes(x = trend, y = RMSE.media, fill = x.reg)) + geom_boxplot()
+```
+
+Añadir el regresor extra no consigue mejorar el modelo. Sin embargo, dejar fuera la variable tendencia sí lo logra.
+
+En definitiva, hemos podido ver gráficamente que el mejor modelo determinístico, en general, es el modelo estacional con ciclos semanales, sin más regresores ni procesos de preselección de variables.
+
+```{r}
+tops <- results %>% group_by(PDV,SKU) %>% 
+  slice_min(RMSE, n = 1, with_ties = F)
+
+tops %>% group_by(trend, x.reg, seasonality, day_freq, stepaic) %>% 
+  count() %>% ungroup() %>% slice_max(n, n = 5)
+```
+
+Los modelos más escogidos son estacionales semanales, con distintas combinaciones de los otros regresores.
